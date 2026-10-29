@@ -1,0 +1,302 @@
+<!DOCTYPE html><html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#087e70">
+<title>چت دونفره</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#eaf0f2;color:#18232b}
+header{background:#087e70;color:white;padding:17px;text-align:center;font-size:21px;font-weight:bold}
+main{max-width:600px;margin:auto;padding:14px}
+.panel{background:white;padding:17px;border-radius:14px;margin:12px 0;box-shadow:0 2px 8px #0000000b}
+input,button{width:100%;padding:13px;margin:6px 0;border-radius:9px;font-size:15px}
+input{border:1px solid #ccd5d9;background:white;color:#18232b}
+button{border:0;background:#087e70;color:white;cursor:pointer}
+button.secondary{background:#e5eeee;color:#164e48}
+button:disabled{opacity:.5}
+.hidden{display:none!important}
+.note{font-size:13px;color:#65757c;line-height:1.8}
+#status{white-space:pre-wrap;font-size:14px;line-height:1.8}
+#messages{height:43vh;min-height:250px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:10px;background:#edf4f2;border-radius:12px}
+.msg{max-width:85%;padding:10px 12px;border-radius:12px;background:white;align-self:flex-start;overflow-wrap:anywhere}
+.msg.mine{background:#c9f4d8;align-self:flex-end}
+.msg small{display:block;font-size:10px;color:#65757c;margin-top:5px}
+.row{display:flex;gap:7px;align-items:center}
+.row input{flex:1;min-width:0}
+.row button{width:auto;min-width:75px}
+#who{font-size:14px;color:#53666b;margin-bottom:8px}
+h3{margin-top:0}
+</style>
+</head>
+<body>
+<header>💬 چت دونفره</header>
+<main>
+  <div class="panel" id="authPanel">
+    <h3 id="authTitle">ثبت‌نام / ورود</h3>
+    <div id="signupFields">
+      <input id="username" placeholder="نام کاربری (مثلاً ali123)" autocomplete="username">
+    </div>
+    <input id="email" type="email" placeholder="ایمیل" autocomplete="email">
+    <input id="password" type="password" placeholder="رمز عبور" autocomplete="current-password">
+    <button id="submitAuth">ثبت‌نام</button>
+    <button id="switchAuth" class="secondary">قبلاً حساب ساخته‌ام؛ ورود</button>
+    <p class="note">برای ثبت‌نام نام کاربری، ایمیل و رمز عبور لازم است. نام کاربری باید حداقل ۳ حرف انگلیسی یا عدد داشته باشد.</p>
+  </div>  <div class="panel hidden" id="chatPanel">
+    <div class="row">
+      <div style="flex:1">حساب: <b id="myName"></b></div>
+      <button id="logout" class="secondary">خروج</button>
+    </div>
+    <hr style="border:0;border-top:1px solid #e3e9eb;margin:14px 0">
+    <h3>پیدا کردن کاربر</h3>
+    <div class="row">
+      <input id="searchName" placeholder="نام کاربری دقیق را بنویس">
+      <button id="searchBtn">جست‌وجو</button>
+    </div>
+    <div id="searchResult" class="note"></div>
+    <hr style="border:0;border-top:1px solid #e3e9eb;margin:14px 0">
+    <div id="who">برای شروع، نام کاربری فرد موردنظر را جست‌وجو کن.</div>
+    <div id="messages"></div>
+    <div class="row" style="margin-top:10px">
+      <input id="messageInput" placeholder="پیامت را بنویس..." maxlength="2000">
+      <button id="sendBtn">ارسال</button>
+    </div>
+    <p class="note">پیام‌ها در Firestore ذخیره می‌شوند. فقط کاربران مجاز به مشاهده پیام‌های گفت‌وگوی خود هستند؛ قوانین امنیتی Firestore باید مطابق مرحله بعد تنظیم شوند.</p>
+  </div>
+  <div class="panel"><div id="status">در حال آماده‌سازی برنامه...</div></div>
+</main><script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import {
+  getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  onAuthStateChanged, signOut
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc, collection, addDoc,
+  onSnapshot, query, where, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB9ju-14NHgkYmOAp2PDK0JIrsAxMkvGrE",
+  authDomain: "but-274a5.firebaseapp.com",
+  projectId: "but-274a5",
+  storageBucket: "but-274a5.firebasestorage.app",
+  messagingSenderId: "1086319888338",
+  appId: "1:1086319888338:web:887af054fce77b49e82a0b"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const $ = id => document.getElementById(id);
+let signupMode = true;
+let currentUser = null;
+let myProfile = null;
+let selectedUser = null;
+let unsubscribeMessages = null;
+let allMessages = [];
+
+function status(message) { $("status").textContent = message; }
+function cleanError(error) {
+  const messages = {
+    "auth/email-already-in-use": "این ایمیل قبلاً ثبت شده است.",
+    "auth/invalid-email": "فرمت ایمیل درست نیست.",
+    "auth/weak-password": "رمز عبور باید حداقل ۶ نویسه داشته باشد.",
+    "auth/invalid-credential": "ایمیل یا رمز عبور اشتباه است.",
+    "auth/invalid-login-credentials": "ایمیل یا رمز عبور اشتباه است.",
+    "auth/network-request-failed": "اتصال اینترنت یا VPN را بررسی کن.",
+    "permission-denied": "دسترسی Firestore رد شد؛ قوانین امنیتی را بررسی کن."
+  };
+  return messages[error.code] || ("خطا: " + (error.message || error.code || "نامشخص"));
+}
+
+$("switchAuth").onclick = () => {
+  signupMode = !signupMode;
+  $("authTitle").textContent = signupMode ? "ثبت‌نام" : "ورود به حساب";
+  $("submitAuth").textContent = signupMode ? "ثبت‌نام" : "ورود";
+  $("switchAuth").textContent = signupMode
+    ? "قبلاً حساب ساخته‌ام؛ ورود"
+    : "حساب ندارم؛ ثبت‌نام";
+  $("signupFields").classList.toggle("hidden", !signupMode);
+  $("password").autocomplete = signupMode ? "new-password" : "current-password";
+  status("");
+};
+
+$("submitAuth").onclick = async () => {
+  const email = $("email").value.trim().toLowerCase();
+  const password = $("password").value;
+  const username = $("username").value.trim();
+  if (!email || !password) return status("ایمیل و رمز عبور را وارد کن.");
+  if (signupMode && !/^[a-zA-Z0-9_]{3,20}$/.test(username))
+    return status("نام کاربری باید ۳ تا ۲۰ حرف انگلیسی، عدد یا زیرخط باشد.");
+
+  $("submitAuth").disabled = true;
+  try {
+    if (signupMode) {
+      const key = username.toLowerCase();
+      const indexRef = doc(db, "usernameIndex", key);
+      const existing = await getDoc(indexRef);
+      if (existing.exists()) throw new Error("این نام کاربری قبلاً انتخاب شده است.");
+
+      const credential = await createUserWithEmailAndPassword(auth, email, password);
+      const uid = credential.user.uid;
+
+      await setDoc(doc(db, "users", uid), {
+        username, usernameLower: key, createdAt: serverTimestamp()
+      });
+
+      await setDoc(indexRef, { uid, username });
+
+      status("حساب ساخته شد.");
+    } else {
+      await signInWithEmailAndPassword(auth, email, password);
+      status("ورود موفق بود.");
+    }
+  } catch (error) {
+    status(cleanError(error));
+  } finally {
+    $("submitAuth").disabled = false;
+  }
+};
+
+onAuthStateChanged(auth, async user => {
+  currentUser = user;
+  selectedUser = null;
+  allMessages = [];
+  $("searchResult").textContent = "";
+  $("messages").replaceChildren();
+
+  if (unsubscribeMessages) {
+    unsubscribeMessages();
+    unsubscribeMessages = null;
+  }
+
+  if (!user) {
+    myProfile = null;
+    $("authPanel").classList.remove("hidden");
+    $("chatPanel").classList.add("hidden");
+    status("برای استفاده از چت، ثبت‌نام کن یا وارد حساب شو.");
+    return;
+  }
+
+  try {
+    const profileSnap = await getDoc(doc(db, "users", user.uid));
+    if (!profileSnap.exists()) {
+      status("اطلاعات حساب پیدا نشد. ممکن است ثبت‌نام قبلی کامل نشده باشد.");
+      return;
+    }
+    myProfile = profileSnap.data();
+    $("myName").textContent = myProfile.username || "کاربر";
+    $("authPanel").classList.add("hidden");
+    $("chatPanel").classList.remove("hidden");
+    status("وارد حساب شدی. نام کاربری فرد موردنظر را جست‌وجو کن.");
+  } catch (error) {
+    status(cleanError(error));
+  }
+});
+
+$("logout").onclick = async () => {
+  try { await signOut(auth); }
+  catch (error) { status(cleanError(error)); }
+};
+
+$("searchBtn").onclick = async () => {
+  if (!currentUser) return;
+  const name = $("searchName").value.trim();
+  if (!/^[a-zA-Z0-9_]{3,20}$/.test(name))
+    return $("searchResult").textContent = "نام کاربری معتبر وارد کن.";
+  try {
+    const snap = await getDoc(doc(db, "usernameIndex", name.toLowerCase()));
+    if (!snap.exists()) {
+      $("searchResult").textContent = "کاربری با این نام پیدا نشد.";
+      return;
+    }
+    const info = snap.data();
+    if (info.uid === currentUser.uid) {
+      $("searchResult").textContent = "این نام کاربری متعلق به خودت است.";
+      return;
+    }
+    selectedUser = { uid: info.uid, username: info.username };
+    $("searchResult").textContent = "کاربر پیدا شد: " + info.username;
+    $("who").textContent = "گفت‌وگو با " + info.username;
+    $("messages").replaceChildren();
+    listenToMessages();
+  } catch (error) {
+    $("searchResult").textContent = cleanError(error);
+  }
+};
+
+function listenToMessages() {
+  if (unsubscribeMessages) unsubscribeMessages();
+  if (!selectedUser || !currentUser) return;
+
+  const q = query(
+    collection(db, "messages"),
+    where("participants", "array-contains", currentUser.uid)
+  );
+
+  unsubscribeMessages = onSnapshot(q, snapshot => {
+    allMessages = [];
+    snapshot.forEach(item => {
+      const data = item.data();
+      if (
+        Array.isArray(data.participants) &&
+        data.participants.includes(selectedUser.uid) &&
+        data.participants.includes(currentUser.uid)
+      ) {
+        allMessages.push({ id: item.id, ...data });
+      }
+    });
+    allMessages.sort((a,b) => {
+      const ta = a.createdAt?.toMillis?.() || 0;
+      const tb = b.createdAt?.toMillis?.() || 0;
+      return ta - tb;
+    });
+    renderMessages();
+  }, error => status(cleanError(error)));
+}
+
+function renderMessages() {
+  const box = $("messages");
+  box.replaceChildren();
+  for (const msg of allMessages) {
+    const div = document.createElement("div");
+    div.className = "msg" + (msg.senderId === currentUser.uid ? " mine" : "");
+    const text = document.createElement("div");
+    text.textContent = msg.text || "";
+    const time = document.createElement("small");
+    const date = msg.createdAt?.toDate?.();
+    time.textContent = date ? date.toLocaleString("fa-IR") : "اکنون";
+    div.append(text, time);
+    box.appendChild(div);
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendMessage() {
+  const text = $("messageInput").value.trim();
+  if (!currentUser || !selectedUser) return status("اول یک کاربر را جست‌وجو و انتخاب کن.");
+  if (!text) return;
+  $("sendBtn").disabled = true;
+  try {
+    await addDoc(collection(db, "messages"), {
+      senderId: currentUser.uid,
+      receiverId: selectedUser.uid,
+      participants: [currentUser.uid, selectedUser.uid],
+      text,
+      createdAt: serverTimestamp()
+    });
+    $("messageInput").value = "";
+    status("پیام ارسال شد.");
+  } catch (error) {
+    status(cleanError(error));
+  } finally {
+    $("sendBtn").disabled = false;
+  }
+}
+$("sendBtn").onclick = sendMessage;
+$("messageInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") sendMessage();
+});
+</script></body>
+</html>
